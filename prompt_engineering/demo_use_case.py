@@ -11,8 +11,8 @@ from langchain_pinecone import PineconeVectorStore
 load_dotenv()
 
 # Page config
-st.set_page_config(page_title="Schneider RAG Bot", page_icon="⚡")
-st.title("📊 Schneider Electric Survey Chatbot")
+st.set_page_config(page_title="My Project Guide", page_icon="",layout="wide")
+st.title("My Project Guide")
 
 # Load LLM & Retriever (cache to avoid reloads)
 @st.cache_resource
@@ -25,14 +25,24 @@ def setup_chain():
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
     llm = ChatOpenAI(model_name="gpt-4", openai_api_key=os.environ["OPENAI_API_KEY"])
 
+    project_context = """# Product Catalogue API
+
+## 📌 Project Overview
+
+This project is a **Product Catalogue API** designed for an eCommerce platform. It follows a **microservices architecture** using **Node.js, Express.js, PostgreSQL, and Sequelize**. The API allows managing **categories, products, and variants** with full CRUD operations.
+
+"""
+
+
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You're a helpful assistant answering questions from a Schneider Electric survey. If "),
+        ("system", "You're a helpful assistant answering questions from a Given Project data. If question come out of the context, say 'i dont know'"),
         MessagesPlaceholder(variable_name="history"),
         ("human", "Context:\n{context}\n\nQuestion: {question}")
     ])
 
     rag_chain = RunnableMap({
-        "context": lambda x: "\n\n".join([doc.page_content for doc in retriever.get_relevant_documents(x["question"]) if doc.page_content]),
+        "context": lambda x: "\n\n".join(project_context).join("\n\n").join([doc.page_content for doc in retriever.get_relevant_documents(x["question"]) if doc.page_content]),
         "question": lambda x: x["question"],
         "history": lambda x: x["chat_history"]
     }) | prompt | llm
