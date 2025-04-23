@@ -8,3 +8,8 @@ langchain_pinecone
 pypdf
 pandas
 openpyxl
+pinecone-client
+streamlit
+langchain_anthropic
+agent_tools
+requests

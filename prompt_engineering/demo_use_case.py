@@ -1,65 +1,85 @@
 import os
+import streamlit as st
 from dotenv import load_dotenv
-from pinecone import 
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableMap
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 
-from langchain_community.vectorstores import Pinecone as PineconeVectorStore
-from langchain_openai import ChatOpenAI ,OpenAIEmbeddings
-from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-
-# 1. Load environment variables
+# Load environment variables
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
-print(OPENAI_API_KEY)
-print(INDEX_NAME)
-# 2. Initialize Pinecone client
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-index = pc.Index(INDEX_NAME)
+# Page config
+st.set_page_config(page_title="Schneider RAG Bot", page_icon="⚡")
+st.title("📊 Schneider Electric Survey Chatbot")
 
-# 3. Connect to existing index
-embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-vectorstore = PineconeVectorStore.from_existing_index(
-    index_name=index,
-    embedding=embeddings,
-    text_key="text"
-)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+# Load LLM & Retriever (cache to avoid reloads)
+@st.cache_resource
+def setup_chain():
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=os.environ["OPENAI_API_KEY"])
+    vectorstore = PineconeVectorStore.from_existing_index(
+        index_name=os.environ["PINECONE_INDEX_NAME"],
+        embedding=embeddings,
+    )
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+    llm = ChatOpenAI(model_name="gpt-4", openai_api_key=os.environ["OPENAI_API_KEY"])
 
-# 4. Initialize the Chat model
-llm = ChatOpenAI(
-    model_name="gpt-4o-mini",
-    temperature=0.0,
-    openai_api_key=OPENAI_API_KEY
-)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You're a helpful assistant answering questions from a Schneider Electric survey. If "),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", "Context:\n{context}\n\nQuestion: {question}")
+    ])
 
-# 5. Build a conversational retrieval chain with memory
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-qa_chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    retriever=retriever,
-    memory=memory,
-    return_source_documents=True
-)
+    rag_chain = RunnableMap({
+        "context": lambda x: "\n\n".join([doc.page_content for doc in retriever.get_relevant_documents(x["question"]) if doc.page_content]),
+        "question": lambda x: x["question"],
+        "history": lambda x: x["chat_history"]
+    }) | prompt | llm
 
-# 6. Chat loop for insights
+    return rag_chain
 
-def chat_loop():
-    print("Welcome to Survey Insights Chat! Type 'exit' to quit.")
-    while True:
-        user_input = input("You: ")
-        if user_input.strip().lower() in ["exit", "quit"]:
-            print("Goodbye!")
-            break
+rag_chain = setup_chain()
 
-        result = qa_chain({"question": user_input})
-        answer = result.get("answer", "No answer generated.")
-        print(f"Assistant: {answer}\n")
+# Chat history state
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-        # Optionally print source docs
-        for doc in result.get("source_documents", []):
-            print(f"【source】 {doc.metadata.get('source', '')}: {doc.page_content[:200]}...\n")
+# Chat input
+user_input = st.chat_input("Ask a question about the survey...")
 
-if __name__ == "__main__":
-    chat_loop()
+# Display chat history
+for msg in st.session_state.chat_history:
+    if isinstance(msg, HumanMessage):
+        with st.chat_message("user"):
+            st.markdown(msg.content)
+    elif isinstance(msg, AIMessage):
+        with st.chat_message("assistant"):
+            st.markdown(msg.content)
+
+# Button to view full chat history
+if st.button("View Full Chat History"):
+    with st.expander("Full Chat History", expanded=True):
+        for msg in st.session_state.chat_history:
+            if isinstance(msg, HumanMessage):
+                st.markdown(f"**User**: {msg.content}")
+            elif isinstance(msg, AIMessage):
+                st.markdown(f"**Assistant**: {msg.content}")
+
+# On user input
+if user_input:
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    st.session_state.chat_history.append(HumanMessage(content=user_input))
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                response = rag_chain.invoke({
+                    "question": user_input,
+                    "chat_history": st.session_state.chat_history
+                })
+                st.markdown(response.content)
+                st.session_state.chat_history.append(AIMessage(content=response.content))
+            except Exception as e:
+                st.error(f"Error: {e}")
