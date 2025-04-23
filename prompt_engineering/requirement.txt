@@ -1,0 +1,10 @@
+langchain
+langchain-openai
+python-dotenv
+langchain_core
+pinecone
+langchain_community
+langchain_pinecone
+pypdf
+pandas
+openpyxl
